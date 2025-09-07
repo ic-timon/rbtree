@@ -14,12 +14,6 @@ type Value struct {
 	Payload [1]byte
 }
 
-type Tree interface {
-	Insert(int, interface{})
-	Get(int) (interface{}, bool)
-	Delete(int)
-}
-
 // ----------------- 工具：中序遍历 & 排序检查 -----------------
 func inorder(n *node, keys *[]int) {
 	if n == nil {

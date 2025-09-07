@@ -1,7 +1,8 @@
 # Concurrent Red-Black Tree in Go
 
 本项目实现了一个 **支持并发访问的红黑树 (Red-Black Tree)**，并提供了多种并发控制策略的封装，便于在不同场景下进行性能权衡和选择。  
-同时包含完整的单元测试、性质验证（红黑树性质检查）、有序/区间操作，以及基准测试 (benchmark)。
+同时包含完整的单元测试、性质验证（红黑树性质检查）、有序/区间操作，以及基准测试 (benchmark)。  
+**现已支持基于 gob 的快照 + WAL 增量日志持久化功能。**
 
 ---
 
@@ -25,6 +26,10 @@
 
 - **基准测试 (Benchmark)**  
   提供不同并发度和实现方式下的性能对比，并支持区间遍历操作的性能测试。
+
+- **持久化支持（Snapshot + WAL）**  
+  - 提供 `PersistentManager` 工具，支持对任意树实现进行 gob 快照和增量 WAL 日志持久化。
+  - 支持高效恢复、快照与日志自动切换，适合高可靠场景。
 
 ---
 
@@ -67,6 +72,35 @@ func main() {
     })
 }
 ```
+
+---
+
+### 🗄️ 持久化用法（快照 + WAL）
+
+```go
+import (
+    "github.com/ic-timon/rbtree"
+)
+
+func main() {
+    tree := rbtree.NewShardedRBTreeOpt(0)
+    pm, _ := rbtree.NewPersistentManager(tree, "wal.log")
+
+    // 插入/删除自动写 WAL
+    pm.Insert(1, "foo")
+    pm.Delete(1)
+
+    // 保存快照
+    pm.SaveSnapshot("snapshot.gob")
+    // 快照后建议清空 WAL
+    pm.TruncateWAL("wal.log")
+
+    // 恢复
+    tree2 := rbtree.NewShardedRBTreeOpt(0)
+    rbtree.LoadFromSnapshotAndWAL(tree2, "snapshot.gob", "wal.log")
+}
+```
+- **说明**：快照后应调用 `TruncateWAL` 清空日志，避免恢复时重复应用操作。
 
 ---
 
@@ -126,11 +160,17 @@ Go: go1.22+
   - 红节点的子节点均为黑色
   - 所有路径黑高一致
 - 有序/区间操作测试（Min/Max/Prev/Next/Range）
+- **持久化与恢复测试**（见 `persistent_test.go`）
 
 运行全部测试与基准测试：
 ```
 go test -v
 go test -bench . -benchmem
+```
+
+只运行持久化相关基准测试：
+```
+go test -bench=PersistentManager -benchmem
 ```
 
 ---
@@ -139,4 +179,5 @@ go test -bench . -benchmem
 
 - `NewShardedRBTreeOpt(0)` 会自动根据 CPU 数量选择分片数，推荐用法。
 - 支持高效的有序检索和区间遍历，适合需要有序集合的高并发场景。
-- 若需自定义分片数，可传入正整数
+- 若需自定义分片数，可传入正整数。
+- **持久化功能不影响原有 API 和测试，按需引入即可。**
