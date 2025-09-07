@@ -30,7 +30,7 @@
 ### 安装
 
 ```bash
-go get github.com//concurrent-rbtree
+go get github.com/ic-timon/rbtree
 ```
 
 
@@ -40,7 +40,7 @@ package main
 
 import (
     "fmt"
-    "tree/rbtree"
+    "github.com/ic-timon/rbtree"
 )
 
 func main() {
