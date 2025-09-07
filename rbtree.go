@@ -438,3 +438,202 @@ func (s *ShardedRBTreeOpt) Delete(key int) {
 	defer sh.mu.Unlock()
 	sh.tree.Delete(key)
 }
+
+// ...existing code...
+
+// ================= 有序/区间操作 =================
+
+// 获取最小 key
+func (t *RBTree) Min() (int, interface{}, bool) {
+	x := t.root
+	if x == nil {
+		return 0, nil, false
+	}
+	for x.left != nil {
+		x = x.left
+	}
+	return x.key, x.value, true
+}
+
+// 获取最大 key
+func (t *RBTree) Max() (int, interface{}, bool) {
+	x := t.root
+	if x == nil {
+		return 0, nil, false
+	}
+	for x.right != nil {
+		x = x.right
+	}
+	return x.key, x.value, true
+}
+
+// 获取 key 的前驱（小于 key 的最大 key）
+func (t *RBTree) Prev(key int) (int, interface{}, bool) {
+	x := t.root
+	var prev *node
+	for x != nil {
+		if key > x.key {
+			prev = x
+			x = x.right
+		} else {
+			x = x.left
+		}
+	}
+	if prev != nil {
+		return prev.key, prev.value, true
+	}
+	return 0, nil, false
+}
+
+// 获取 key 的后继（大于 key 的最小 key）
+func (t *RBTree) Next(key int) (int, interface{}, bool) {
+	x := t.root
+	var next *node
+	for x != nil {
+		if key < x.key {
+			next = x
+			x = x.left
+		} else {
+			x = x.right
+		}
+	}
+	if next != nil {
+		return next.key, next.value, true
+	}
+	return 0, nil, false
+}
+
+// 区间遍历 [start, end]，闭区间
+func (t *RBTree) Range(start, end int, fn func(key int, value interface{}) bool) {
+	var walk func(n *node)
+	walk = func(n *node) {
+		if n == nil {
+			return
+		}
+		if n.key > start {
+			walk(n.left)
+		}
+		if n.key >= start && n.key <= end {
+			if !fn(n.key, n.value) {
+				return
+			}
+		}
+		if n.key < end {
+			walk(n.right)
+		}
+	}
+	walk(t.root)
+}
+
+// ================== 并发封装区间操作（以 Optimized 为例） ==================
+
+// 获取全局最小 key
+func (s *ShardedRBTreeOpt) Min() (int, interface{}, bool) {
+	minKey := 0
+	var minVal interface{}
+	found := false
+	for _, sh := range s.shards {
+		sh.mu.RLock()
+		k, v, ok := sh.tree.Min()
+		sh.mu.RUnlock()
+		if ok && (!found || k < minKey) {
+			minKey, minVal, found = k, v, true
+		}
+	}
+	return minKey, minVal, found
+}
+
+// 获取全局最大 key
+func (s *ShardedRBTreeOpt) Max() (int, interface{}, bool) {
+	maxKey := 0
+	var maxVal interface{}
+	found := false
+	for _, sh := range s.shards {
+		sh.mu.RLock()
+		k, v, ok := sh.tree.Max()
+		sh.mu.RUnlock()
+		if ok && (!found || k > maxKey) {
+			maxKey, maxVal, found = k, v, true
+		}
+	}
+	return maxKey, maxVal, found
+}
+
+// 区间遍历（所有分片）
+func (s *ShardedRBTreeOpt) Range(start, end int, fn func(key int, value interface{}) bool) {
+	for _, sh := range s.shards {
+		sh.mu.RLock()
+		sh.tree.Range(start, end, fn)
+		sh.mu.RUnlock()
+	}
+}
+
+// ...existing code...
+
+// ================== 并发封装区间操作（RWLock/PathLock） ==================
+
+// RWLock 版本
+func (s *ShardedRBTreeRW) Min() (int, interface{}, bool) {
+	minKey := 0
+	var minVal interface{}
+	found := false
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	k, v, ok := s.tree.Min()
+	if ok {
+		minKey, minVal, found = k, v, true
+	}
+	return minKey, minVal, found
+}
+
+func (s *ShardedRBTreeRW) Max() (int, interface{}, bool) {
+	maxKey := 0
+	var maxVal interface{}
+	found := false
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	k, v, ok := s.tree.Max()
+	if ok {
+		maxKey, maxVal, found = k, v, true
+	}
+	return maxKey, maxVal, found
+}
+
+func (s *ShardedRBTreeRW) Range(start, end int, fn func(key int, value interface{}) bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	s.tree.Range(start, end, fn)
+}
+
+// PathLock 版本
+func (s *ShardedRBTreePath) Min() (int, interface{}, bool) {
+	minKey := 0
+	var minVal interface{}
+	found := false
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k, v, ok := s.tree.Min()
+	if ok {
+		minKey, minVal, found = k, v, true
+	}
+	return minKey, minVal, found
+}
+
+func (s *ShardedRBTreePath) Max() (int, interface{}, bool) {
+	maxKey := 0
+	var maxVal interface{}
+	found := false
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k, v, ok := s.tree.Max()
+	if ok {
+		maxKey, maxVal, found = k, v, true
+	}
+	return maxKey, maxVal, found
+}
+
+func (s *ShardedRBTreePath) Range(start, end int, fn func(key int, value interface{}) bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tree.Range(start, end, fn)
+}

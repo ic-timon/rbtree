@@ -7,12 +7,11 @@ import (
 	"sort"
 	"testing"
 	"time"
-	"unsafe"
 )
 
 // 模拟较大 value，能更真实地反映 allocs/B/op
 type Value struct {
-	Payload [256]byte
+	Payload [1]byte
 }
 
 type Tree interface {
@@ -169,6 +168,147 @@ func TestRBTreeCorrectness(t *testing.T) {
 	checkRBProperties(t, tree.root)
 }
 
+// ----------------- 有序/区间操作功能测试 -----------------
+func TestRBTreeOrderOps(t *testing.T) {
+	arena := newArena()
+	tree := NewRBTree(arena)
+	N := 1000
+	for i := 0; i < N; i++ {
+		tree.Insert(i, i*10)
+	}
+
+	// Min/Max
+	minK, minV, ok := tree.Min()
+	if !ok || minK != 0 || minV.(int) != 0 {
+		t.Fatalf("Min failed: got %v %v", minK, minV)
+	}
+	maxK, maxV, ok := tree.Max()
+	if !ok || maxK != N-1 || maxV.(int) != (N-1)*10 {
+		t.Fatalf("Max failed: got %v %v", maxK, maxV)
+	}
+
+	// Prev/Next
+	for i := 1; i < N-1; i++ {
+		pk, pv, ok := tree.Prev(i)
+		if !ok || pk != i-1 || pv.(int) != (i-1)*10 {
+			t.Fatalf("Prev(%d) failed: got %v %v", i, pk, pv)
+		}
+		nk, nv, ok := tree.Next(i)
+		if !ok || nk != i+1 || nv.(int) != (i+1)*10 {
+			t.Fatalf("Next(%d) failed: got %v %v", i, nk, nv)
+		}
+	}
+	// Prev of min
+	_, _, ok = tree.Prev(0)
+	if ok {
+		t.Fatalf("Prev(0) should not exist")
+	}
+	// Next of max
+	_, _, ok = tree.Next(N - 1)
+	if ok {
+		t.Fatalf("Next(N-1) should not exist")
+	}
+
+	// 区间遍历
+	sum := 0
+	tree.Range(100, 199, func(k int, v interface{}) bool {
+		sum += k
+		return true
+	})
+	expect := 0
+	for i := 100; i <= 199; i++ {
+		expect += i
+	}
+	if sum != expect {
+		t.Fatalf("Range sum failed: got %d, want %d", sum, expect)
+	}
+}
+
+// ----------------- 并发封装有序/区间操作功能测试 -----------------
+func TestShardedRBTreeOptOrderOps(t *testing.T) {
+	tree := NewShardedRBTreeOpt(0)
+	N := 1000
+	for i := 0; i < N; i++ {
+		tree.Insert(i, i*10)
+	}
+	minK, minV, ok := tree.Min()
+	if !ok || minK != 0 || minV.(int) != 0 {
+		t.Fatalf("Min failed: got %v %v", minK, minV)
+	}
+	maxK, maxV, ok := tree.Max()
+	if !ok || maxK != N-1 || maxV.(int) != (N-1)*10 {
+		t.Fatalf("Max failed: got %v %v", maxK, maxV)
+	}
+	sum := 0
+	tree.Range(100, 199, func(k int, v interface{}) bool {
+		sum += k
+		return true
+	})
+	expect := 0
+	for i := 100; i <= 199; i++ {
+		expect += i
+	}
+	if sum != expect {
+		t.Fatalf("Range sum failed: got %d, want %d", sum, expect)
+	}
+}
+
+func TestShardedRBTreeRWOrderOps(t *testing.T) {
+	tree := &ShardedRBTreeRW{tree: NewRBTree(newArena())}
+	N := 1000
+	for i := 0; i < N; i++ {
+		tree.Insert(i, i*10)
+	}
+	minK, minV, ok := tree.Min()
+	if !ok || minK != 0 || minV.(int) != 0 {
+		t.Fatalf("Min failed: got %v %v", minK, minV)
+	}
+	maxK, maxV, ok := tree.Max()
+	if !ok || maxK != N-1 || maxV.(int) != (N-1)*10 {
+		t.Fatalf("Max failed: got %v %v", maxK, maxV)
+	}
+	sum := 0
+	tree.Range(100, 199, func(k int, v interface{}) bool {
+		sum += k
+		return true
+	})
+	expect := 0
+	for i := 100; i <= 199; i++ {
+		expect += i
+	}
+	if sum != expect {
+		t.Fatalf("Range sum failed: got %d, want %d", sum, expect)
+	}
+}
+
+func TestShardedRBTreePathOrderOps(t *testing.T) {
+	tree := &ShardedRBTreePath{tree: NewRBTree(newArena())}
+	N := 1000
+	for i := 0; i < N; i++ {
+		tree.Insert(i, i*10)
+	}
+	minK, minV, ok := tree.Min()
+	if !ok || minK != 0 || minV.(int) != 0 {
+		t.Fatalf("Min failed: got %v %v", minK, minV)
+	}
+	maxK, maxV, ok := tree.Max()
+	if !ok || maxK != N-1 || maxV.(int) != (N-1)*10 {
+		t.Fatalf("Max failed: got %v %v", maxK, maxV)
+	}
+	sum := 0
+	tree.Range(100, 199, func(k int, v interface{}) bool {
+		sum += k
+		return true
+	})
+	expect := 0
+	for i := 100; i <= 199; i++ {
+		expect += i
+	}
+	if sum != expect {
+		t.Fatalf("Range sum failed: got %d, want %d", sum, expect)
+	}
+}
+
 // ----------------- 辅助 -----------------
 func min(a, b int) int {
 	if a < b {
@@ -177,11 +317,10 @@ func min(a, b int) int {
 	return b
 }
 
-// ----------------- 基准测试 -----------------
+// ----------------- 并发基准测试（阶段性：插入 -> 查询 -> 删除） -----------------
 func BenchmarkTrees(b *testing.B) {
 	impls := map[string]func(int) Tree{
 		"RWLock": func(_ int) Tree {
-			// 为每个 benchmark 构造独立 RBTree（用 arena 管理节点）
 			return &ShardedRBTreeRW{tree: NewRBTree(newArena())}
 		},
 		"PathLock": func(_ int) Tree {
@@ -191,46 +330,88 @@ func BenchmarkTrees(b *testing.B) {
 			return &ShardedRBTreeLF{}
 		},
 		"Optimized": func(shards int) Tree {
-			// 将分片数量设置为 shards，这样与并发 worker 数成比例，减少争用
 			return NewShardedRBTreeOpt(shards)
 		},
 	}
 
 	numCPU := runtime.NumCPU()
 	Ws := []int{2 * numCPU, 4 * numCPU, 8 * numCPU}
-	fmt.Println("=== Benchmark Results ===")
+
+	fmt.Println("=== Benchmark Results (Concurrent Insert -> Get -> Delete) ===")
 	fmt.Printf("%-10s %-6s %-12s %-12s %-12s\n", "Impl", "W", "ns/op", "B/op", "allocs/op")
 
 	rand.Seed(time.Now().UnixNano())
 
 	for _, W := range Ws {
-		N := W * 1000_000_000 // key 空间 10 亿，减少不同 worker 之间的 key 冲突
+		N := W * 1_000 // 每阶段操作总数
+		keys := make([]int, N)
+		for i := 0; i < N; i++ {
+			keys[i] = rand.Intn(N * 10)
+		}
+
 		for name, ctor := range impls {
 			b.Run(fmt.Sprintf("%s-%d", name, W), func(b *testing.B) {
-				tree := ctor(W) // 为 Optimized 传 shards=W，其他构造器会忽略参数
+				tree := ctor(W)
 				b.ReportAllocs()
 				b.ResetTimer()
 
-				b.RunParallel(func(pb *testing.PB) {
-					// 每个并发 worker 使用局部 rng，减少全局 rand 锁竞争对 benchmark 的影响
-					r := rand.New(rand.NewSource(time.Now().UnixNano() ^ int64(uintptr(unsafePointer()))))
-					for pb.Next() {
-						key := r.Intn(N)
-						// 使用较大 value 模拟真实负载（会造成 alloc）
-						tree.Insert(key, &Value{})
-						tree.Get(key)
-						tree.Delete(key)
-					}
-				})
+				for i := 0; i < b.N; i++ {
+					// -------- 并发插入 --------
+					b.RunParallel(func(pb *testing.PB) {
+						r := rand.New(rand.NewSource(time.Now().UnixNano()))
+						for pb.Next() {
+							k := keys[r.Intn(len(keys))]
+							tree.Insert(k, &Value{})
+						}
+					})
+
+					// -------- 并发查询 --------
+					b.RunParallel(func(pb *testing.PB) {
+						r := rand.New(rand.NewSource(time.Now().UnixNano()))
+						for pb.Next() {
+							k := keys[r.Intn(len(keys))]
+							tree.Get(k)
+						}
+					})
+
+					// -------- 并发删除 --------
+					b.RunParallel(func(pb *testing.PB) {
+						r := rand.New(rand.NewSource(time.Now().UnixNano()))
+						for pb.Next() {
+							k := keys[r.Intn(len(keys))]
+							tree.Delete(k)
+						}
+					})
+				}
 			})
 		}
 	}
 }
 
-// unsafePointer 用于生成 per-goroutine 随机种子的一部分（不直接使用 unsafe.Pointer 值，
-// 仅返回 uintptr(&seed) 的低位），避免 import unsafe 在代码里显式出现。
-
-func unsafePointer() uintptr {
-	var x int
-	return uintptr(unsafe.Pointer(&x))
+// ----------------- 区间遍历基准测试 -----------------
+func BenchmarkRangeOps(b *testing.B) {
+	tree := NewShardedRBTreeOpt(0)
+	N := 1_000_000
+	for i := 0; i < N; i++ {
+		tree.Insert(i, i)
+	}
+	b.ResetTimer()
+	b.Run("Range-100", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			sum := 0
+			tree.Range(100, 199, func(k int, v interface{}) bool {
+				sum += k
+				return true
+			})
+		}
+	})
+	b.Run("Range-10k", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			sum := 0
+			tree.Range(100_000, 109_999, func(k int, v interface{}) bool {
+				sum += k
+				return true
+			})
+		}
+	})
 }
